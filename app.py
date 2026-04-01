@@ -1,50 +1,73 @@
 import streamlit as st
 import pandas as pd
 import pydeck as pdk
+from datetime import timedelta
 
-df = pd.read_csv("master_merged_data.csv")
-df = df.fillna(0) #drops all the NaN datapoints and replaces them with a 0
+# pt 1: loading everything
+# allows streamlit to not have to re-read the file over and over
+@st.cache_data
+def load_data():
+    df = pd.read_csv("master_merged_data.csv")
+    df = df.fillna(0)
+    df["date"] = pd.to_datetime(df["date"]).dt.date
+    # renames coords to be shorter
+    df = df.rename(columns={'latitude': 'lat', 'longitude': 'lng'})
+    return df
 
-#convert date column
-df["date"] = pd.to_datetime(df["date"]).dt.date
+df = load_data()
 
-#renaming columns bc it's easier
-df = df.rename(columns={
-    'latitude': 'lat',
-    'longitude': 'lng',
-})
+# create predicted db
+df2 = df.copy()
+for col in ["pm25", "fire_frp_sum", "wind_speed"]:
+    #makes sure columns exist in df2
+    if col in df2.columns:
+        #WHERE CONVERSION OF VALUES GOES!!!
+        df2[col] = df2[col] * 2.0
 
-#making a sidebar for date and layer control
-st.sidebar.title("Filters")
+# takes current date and adds a year to it
+df2["date"] = df2["date"].apply(lambda x: x + timedelta(days=365))
 
-### WORKING ON CHOOSING THE DATE ###
+# pt 2: sidebar
+st.sidebar.markdown("Filters")
 
-#finds earliest and latest date for the bounds
-min_date = df["date"].min()
-max_date = df["date"].max()
+#makes radio toggle
+mode = st.sidebar.radio("Data View:", ["Current Values", "Predicted Values"])
+st.sidebar.markdown("---")
 
-#need to initalize a session state for date syncing
+# determines dataset to use
+if mode == "Current Values":
+    active_df = df
+else:
+    active_df = df2
+
+min_date = active_df["date"].min()
+max_date = active_df["date"].max()
+
+# pt 3: slider stuff
+#if frontend is opened for first time, the date on the sldier is set to the min
 if "selected_date" not in st.session_state:
     st.session_state.selected_date = min_date
 
-#helper to normalize date types
+# makes sure selected date is in bounds, and makes it min/max if out of bounds
+if st.session_state.selected_date < min_date:
+    st.session_state.selected_date = min_date
+elif st.session_state.selected_date > max_date:
+    st.session_state.selected_date = max_date
+
 def to_date(x):
-    if hasattr(x, "date"):
-        return x.date()
+    if hasattr(x, "date"): return x.date()
     return x
 
-#callback functions
 def manual_changed():
     st.session_state.selected_date = to_date(st.session_state.manual_date)
-    st.session_state.slider_date = st.session_state.selected_date  # sync slider
+    st.session_state.slider_date = st.session_state.selected_date
 
 def slider_changed():
     st.session_state.selected_date = to_date(st.session_state.slider_date)
-    st.session_state.manual_date = st.session_state.selected_date  # sync input
+    st.session_state.manual_date = st.session_state.selected_date
 
-#make date input box
 st.sidebar.date_input(
-    "Enter Date (must be in the year 2025):",
+    "Enter Date:",
     value=st.session_state.selected_date,
     min_value=min_date,
     max_value=max_date,
@@ -52,7 +75,6 @@ st.sidebar.date_input(
     on_change=manual_changed
 )
 
-#make date slider
 st.sidebar.slider(
     "Select Date:",
     min_value=min_date,
@@ -64,63 +86,97 @@ st.sidebar.slider(
 )
 
 selected_date = st.session_state.selected_date
+selected_layer = st.sidebar.selectbox("Select Metric:", ["pm25", "fire_frp_sum", "wind_speed"])
 
-### END DATE SELECTION PART ###
+# --- 4. FILTERING & DATA CLEANING ---
+# --- 4. FILTERING & DYNAMIC SCALING ---
+df_day = active_df[active_df["date"] == selected_date].copy()
 
-#select your layer
-selected_layer = st.sidebar.selectbox(
-    "Select Layer:",
-    ["pm25", "fire_frp_sum", "wind_speed"]
-)
-
-#filters for the day and makes sure it's a valid date
-df_day = df[df["date"] == selected_date]
 if df_day.empty:
-    st.warning("No data for this day")
+    st.warning(f"No data for {selected_date}")
     st.stop()
-df_day = df_day.drop(columns=["date"])
 
-#ok time for the heatmap
-#layer = pdk.Layer(
-#    "HeatmapLayer",
-#    data = df_day,
-#    get_position = ["lng", "lat"],
-#    get_weight = selected_layer,
-#    radius_pixels = 50,
-#)
+# 1. STANDARDIZATION LOGIC
+max_val = active_df[selected_layer].max()
+min_val = active_df[selected_layer].min()
 
-#let's try a scatterplot map
-#making sure the sizing of dot is dynamic
-df_day["radius"] = df_day[selected_layer] * 2000
-#figuring out color scale
-df_day["color_value"] = (df_day[selected_layer] * 10).clip(0, 255)
-df_day["color"] = df_day["color_value"].apply(lambda v: [v, 50, 255 - v, 200])
-#creating the layer
-layer = pdk.Layer(
-    "ScatterplotLayer",
-    data = df_day,
-    get_position = ["lng", "lat"],
-    get_radius="radius",
-    get_fill_color = "color",
-    pickable = True,
-)
+# --- TWEAK THESE NUMBERS TO YOUR LIKING ---
+MAX_RADIUS = 20000  # Increased this for a "bigger" look
+MIN_RADIUS = 2000   # The smallest a dot will ever be
+# ------------------------------------------
 
-# set view to cali!!!
+if max_val <= min_val:
+    df_day["normalized_intensity"] = 0.5 # Default middle-ground
+else:
+    df_day["normalized_intensity"] = (df_day[selected_layer] - min_val) / (max_val - min_val)
+
+# Apply the bigger scale
+df_day["radius"] = (df_day["normalized_intensity"] * (MAX_RADIUS - MIN_RADIUS)) + MIN_RADIUS
+
+# 2. COLOR LOGIC (Standardized)
+def get_clean_color(row):
+    intensity = row["normalized_intensity"]
+    val = int(intensity * 255)
+    
+    if mode == "Current Values":
+        return [val, 50, 255 - val, 200]
+    else:
+        # Bright neon orange for predicted values
+        return [255, 100 + int(intensity * 100), 0, 210]
+
+df_day["color"] = df_day.apply(get_clean_color, axis=1)
+
+render_df = df_day[["lat", "lng", "radius", "color", selected_layer]].copy().reset_index(drop=True)
+
+# --- 5. MAP RENDERING ---
+st.title("Los Angeles Air Quality Dashboard")
+st.subheader(f"Viewing: {mode}")
+
+# Centering the map
+center_lat = float(render_df['lat'].mean())
+center_lng = float(render_df['lng'].mean())
+
 view_state = pdk.ViewState(
-    latitude=df_day['lat'].mean(),
-    longitude=df_day['lng'].mean(),
-    zoom=6,
+    latitude=center_lat,
+    longitude=center_lng,
+    zoom=8,
     pitch=45
 )
 
-#adding a title
-st.title("Los Angeles Air Quality Heatmap")
+layer = pdk.Layer(
+    "ScatterplotLayer",
+    data=render_df,
+    get_position=["lng", "lat"],
+    get_radius="radius",
+    get_fill_color="color",
+    pickable=True,
+    opacity=0.8
+)
 
-#showing the layers!
+# "dark" or "light" are standard styles that don't usually require a Mapbox token
 r = pdk.Deck(
     layers=[layer],
     initial_view_state=view_state,
+    map_style="dark", 
     tooltip={"text": f"{selected_layer}: {{{selected_layer}}}"},
 )
 
 st.pydeck_chart(r)
+
+# --- 6. METRICS (Under the Map) ---
+st.markdown("Data Summary")
+m1, m2, m3, m4 = st.columns(4)
+
+day_avg = render_df[selected_layer].mean()
+global_avg = active_df[selected_layer].mean()
+
+with m1:
+    # Inverse color: Higher values (pollution) show as a "bad" red delta
+    st.metric("Day Average", f"{day_avg:.2f}", 
+              delta=f"{day_avg - global_avg:.2f} vs Avg", delta_color="inverse")
+with m2:
+    st.metric("Global Average", f"{global_avg:.2f}")
+with m3:
+    st.metric("Record Max", f"{active_df[selected_layer].max():.2f}")
+with m4:
+    st.metric("Record Min", f"{active_df[selected_layer].min():.2f}")
