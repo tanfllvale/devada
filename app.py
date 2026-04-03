@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import pydeck as pdk
 from datetime import timedelta
+from datetime import date
 
 # pt 1: loading everything
 # allows streamlit to not have to re-read the file over and over
@@ -17,15 +18,8 @@ def load_data():
 df = load_data()
 
 # create predicted db
-df2 = df.copy()
-for col in ["pm25", "fire_frp_sum", "wind_speed"]:
-    #makes sure columns exist in df2
-    if col in df2.columns:
-        #WHERE CONVERSION OF VALUES GOES!!!
-        df2[col] = df2[col] * 2.0
-
-# takes current date and adds a year to it
-df2["date"] = df2["date"].apply(lambda x: x + timedelta(days=365))
+df2 = pd.read_csv("sarimax_forecast.csv")
+df2["date"] = pd.to_datetime(df2["date"]).dt.date
 
 # pt 2: sidebar
 st.sidebar.markdown("Filters")
@@ -37,35 +31,54 @@ st.sidebar.markdown("---")
 # determines dataset to use
 if mode == "Current Values":
     active_df = df
+    metric_options = ["pm25", "fire_frp_sum", "wind_speed"]
 else:
     active_df = df2
+    metric_options = ["fire_frp_sum"]
 
 min_date = active_df["date"].min()
 max_date = active_df["date"].max()
 
-# pt 3: slider stuff
-#if frontend is opened for first time, the date on the sldier is set to the min
+# --- pt 2: sidebar & mode logic ---
+# --- pt 2: sidebar & mode logic ---
+st.sidebar.markdown("### Filters")
+
+# 1. The Radio Toggle
+mode = st.sidebar.radio("Data View:", ["Current Values", "Predicted Values"], key="main_mode_toggle")
+st.sidebar.markdown("---")
+
+# 2. Assign the specific list of columns based on the choice
+if mode == "Current Values":
+    active_df = df
+    metric_options = ["fire_frp_sum"]
+else:
+    active_df = df2
+    metric_options = ["pm25", "fire_frp_sum", "wind_speed"]
+
+# 3. Get date bounds
+min_date = active_df["date"].min()
+max_date = active_df["date"].max()
+
+# --- pt 3: slider & metric selection ---
+
+# Initialize session state for date
 if "selected_date" not in st.session_state:
     st.session_state.selected_date = min_date
 
-# makes sure selected date is in bounds, and makes it min/max if out of bounds
+# Force the date into the valid range of the active dataframe
 if st.session_state.selected_date < min_date:
     st.session_state.selected_date = min_date
 elif st.session_state.selected_date > max_date:
     st.session_state.selected_date = max_date
 
-def to_date(x):
-    if hasattr(x, "date"): return x.date()
-    return x
-
+# Callback functions
 def manual_changed():
-    st.session_state.selected_date = to_date(st.session_state.manual_date)
-    st.session_state.slider_date = st.session_state.selected_date
+    st.session_state.selected_date = st.session_state.manual_date
 
 def slider_changed():
-    st.session_state.selected_date = to_date(st.session_state.slider_date)
-    st.session_state.manual_date = st.session_state.selected_date
+    st.session_state.selected_date = st.session_state.slider_date
 
+# Date Input
 st.sidebar.date_input(
     "Enter Date:",
     value=st.session_state.selected_date,
@@ -75,6 +88,7 @@ st.sidebar.date_input(
     on_change=manual_changed
 )
 
+# Slider
 st.sidebar.slider(
     "Select Date:",
     min_value=min_date,
@@ -85,8 +99,21 @@ st.sidebar.slider(
     on_change=slider_changed
 )
 
+# --- THE FIX: DYNAMIC SELECTBOX ---
+# We use a placeholder container to force a redraw
+placeholder = st.sidebar.empty()
+
+with placeholder:
+    # We use the 'options' variable we defined in the IF statement above
+    selected_layer = st.selectbox(
+        "Select Metric:", 
+        options=metric_options, 
+        key=f"widget_{mode}" # This key MUST change when mode changes
+    )
+
 selected_date = st.session_state.selected_date
-selected_layer = st.sidebar.selectbox("Select Metric:", ["pm25", "fire_frp_sum", "wind_speed"])
+
+# Radio toggle to switch between datasets
 
 # --- 4. FILTERING & DATA CLEANING ---
 # --- 4. FILTERING & DYNAMIC SCALING ---
@@ -180,3 +207,6 @@ with m3:
     st.metric("Record Max", f"{active_df[selected_layer].max():.2f}")
 with m4:
     st.metric("Record Min", f"{active_df[selected_layer].min():.2f}")
+
+    #run everything on colab to get 2 csv file
+    #m
