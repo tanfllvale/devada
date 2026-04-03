@@ -18,28 +18,31 @@ def load_data():
 df = load_data()
 
 # create predicted db
-df2 = pd.read_csv("sarimax_forecast.csv")
-df2["date"] = pd.to_datetime(df2["date"]).dt.date
+df2 = df.copy()
 
-# pt 2: sidebar
-st.sidebar.markdown("Filters")
+# takes current date and adds a year to it
+df2["date"] = df2["date"].apply(lambda x: x + timedelta(days=365))
 
-#makes radio toggle
-mode = st.sidebar.radio("Data View:", ["Current Values", "Predicted Values"])
-st.sidebar.markdown("---")
+# load and merge forecasted values
+sarimax_df = pd.read_csv("sarimax_forecast.csv")
+sarimax_df["date"] = pd.to_datetime(sarimax_df["date"]).dt.date
 
-# determines dataset to use
-if mode == "Current Values":
-    active_df = df
-    metric_options = ["pm25", "fire_frp_sum", "wind_speed"]
-else:
-    active_df = df2
-    metric_options = ["fire_frp_sum"]
+# Handle potential column name discrepancy
+if "forecasted_pm25" in sarimax_df.columns:
+    sarimax_df.rename(columns={"forecasted_pm25": "forecasted_fire_frp"}, inplace=True)
 
-min_date = active_df["date"].min()
-max_date = active_df["date"].max()
+df2 = pd.merge(df2, sarimax_df, on="date", how="left")
+df2["forecasted_fire_frp"] = df2["forecasted_fire_frp"].interpolate(method="linear").bfill().ffill()
 
-# --- pt 2: sidebar & mode logic ---
+for col in ["pm25", "fire_frp_sum", "wind_speed"]:
+    #makes sure columns exist in df2
+    if col in df2.columns:
+        if col == "fire_frp_sum":
+            df2[col] = df2["forecasted_fire_frp"]
+        else:
+            #WHERE CONVERSION OF VALUES GOES!!!
+            df2[col] = df2[col] * 2.0
+
 # --- pt 2: sidebar & mode logic ---
 st.sidebar.markdown("### Filters")
 
@@ -50,10 +53,10 @@ st.sidebar.markdown("---")
 # 2. Assign the specific list of columns based on the choice
 if mode == "Current Values":
     active_df = df
-    metric_options = ["fire_frp_sum"]
+    metric_options = ["pm25", "fire_frp_sum", "wind_speed"]
 else:
     active_df = df2
-    metric_options = ["pm25", "fire_frp_sum", "wind_speed"]
+    metric_options = ["fire_frp_sum"]
 
 # 3. Get date bounds
 min_date = active_df["date"].min()
@@ -72,21 +75,8 @@ elif st.session_state.selected_date > max_date:
     st.session_state.selected_date = max_date
 
 # Callback functions
-def manual_changed():
-    st.session_state.selected_date = st.session_state.manual_date
-
 def slider_changed():
     st.session_state.selected_date = st.session_state.slider_date
-
-# Date Input
-st.sidebar.date_input(
-    "Enter Date:",
-    value=st.session_state.selected_date,
-    min_value=min_date,
-    max_value=max_date,
-    key="manual_date",
-    on_change=manual_changed
-)
 
 # Slider
 st.sidebar.slider(
