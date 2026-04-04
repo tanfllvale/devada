@@ -12,7 +12,7 @@ def load_data():
     df = df.fillna(0)
     df["date"] = pd.to_datetime(df["date"]).dt.date
     # renames coords to be shorter
-    df = df.rename(columns={'latitude': 'lat', 'longitude': 'lng'})
+    df = df.rename(columns={'latitude': 'lat', 'longitude': 'lng', 'fire_frp_sum':'fire_intensity'})
     return df
 
 df = load_data()
@@ -28,17 +28,17 @@ sarimax_df = pd.read_csv("sarimax_forecast.csv")
 sarimax_df["date"] = pd.to_datetime(sarimax_df["date"]).dt.date
 
 # Handle potential column name discrepancy
-if "forecasted_pm25" in sarimax_df.columns:
-    sarimax_df.rename(columns={"forecasted_pm25": "forecasted_fire_frp"}, inplace=True)
+if "forecasted_fire_frp" in sarimax_df.columns:
+    sarimax_df.rename(columns={"forecasted_fire_frp": "forecasted_fire_intensity"}, inplace=True)
 
 df2 = pd.merge(df2, sarimax_df, on="date", how="left")
-df2["forecasted_fire_frp"] = df2["forecasted_fire_frp"].interpolate(method="linear").bfill().ffill()
+df2["forecasted_fire_intensity"] = df2["forecasted_fire_intensity"].interpolate(method="linear").bfill().ffill()
 
-for col in ["pm25", "fire_frp_sum", "wind_speed"]:
+for col in ["pm25", "fire_intensity", "wind_speed"]:
     #makes sure columns exist in df2
     if col in df2.columns:
-        if col == "fire_frp_sum":
-            df2[col] = df2["forecasted_fire_frp"]
+        if col == "fire_intensity":
+            df2[col] = df2["forecasted_fire_intensity"]
         else:
             #WHERE CONVERSION OF VALUES GOES!!!
             df2[col] = df2[col] * 2.0
@@ -53,10 +53,10 @@ st.sidebar.markdown("---")
 # 2. Assign the specific list of columns based on the choice
 if mode == "Current Values":
     active_df = df
-    metric_options = ["pm25", "fire_frp_sum", "wind_speed"]
+    metric_options = ["pm25", "fire_intensity", "wind_speed"]
 else:
     active_df = df2
-    metric_options = ["fire_frp_sum"]
+    metric_options = ["forecasted_fire_intensity"]
 
 # 3. Get date bounds
 min_date = active_df["date"].min()
