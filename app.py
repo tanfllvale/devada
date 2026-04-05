@@ -12,7 +12,7 @@ def load_data():
     df = df.fillna(0)
     df["date"] = pd.to_datetime(df["date"]).dt.date
     # renames coords to be shorter
-    df = df.rename(columns={'latitude': 'lat', 'longitude': 'lng', 'fire_frp_sum':'fire_intensity'})
+    df = df.rename(columns={'latitude': 'lat', 'longitude': 'lng', 'fire_frp_sum':'fire_intensity', 'pm25': 'pm2.5'})
     return df
 
 df = load_data()
@@ -44,7 +44,7 @@ st.sidebar.markdown("---")
 #dropdown options
 if mode == "Current Values":
     active_df = df
-    metric_options = ["pm25", "fire_intensity", "wind_speed"]
+    metric_options = ["pm2.5", "fire_intensity", "wind_speed"]
 else:
     active_df = df2
     metric_options = ["forecasted_fire_intensity"]
